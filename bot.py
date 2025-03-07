@@ -62,6 +62,18 @@ async def get_bus_info():
 
     return message
 
+# 🔹 Функция для разбиения сообщений на части (если они слишком длинные)
+def split_message(text, max_length=4000):
+    parts = []
+    while len(text) > max_length:
+        split_index = text[:max_length].rfind("\n")  # Ищем последний перенос строки
+        if split_index == -1:
+            split_index = max_length
+        parts.append(text[:split_index])
+        text = text[split_index:]
+    parts.append(text)  # Добавляем оставшуюся часть
+    return parts
+
 # 📩 Команда /start
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -104,18 +116,20 @@ async def set_route(message: Message):
     else:
         await message.answer("❌ У вас нет доступа к этой команде.")
 
-# 🚍 Команда /bus для получения информации о билетах
+# 🚍 Обработчик команды /bus (исправленный)
 @dp.message(Command("bus"))
 async def send_bus_info(message: Message):
     if message.from_user.id == YOUR_TELEGRAM_ID:
         info = await get_bus_info()
         if info:
-            await message.answer(info, parse_mode="Markdown")
+            messages = split_message(info)  # Разбиваем сообщение на части
+            for part in messages:
+                await message.answer(part, parse_mode="Markdown")
         else:
-            await message.answer(f"❌ Билетов нет в наличии на {selected_date}.")
+            await message.answer("❌ Билетов нет в наличии на выбранную дату.")
     else:
         await message.answer("❌ У вас нет доступа к этому боту.")
-
+        
 # 🚨 Команда /stop для остановки бота
 @dp.message(Command("stop"))
 async def stop(message: Message):
