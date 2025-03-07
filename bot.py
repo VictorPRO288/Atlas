@@ -107,7 +107,7 @@ async def stop(message: Message):
 # 🕒 Фоновая проверка билетов
 async def periodic_request():
     while True:
-        await asyncio.sleep(300)  # Проверка каждые 5 минут  
+        await asyncio.sleep(120)  # Проверка каждые 5 минут  
         info = await get_bus_info()
         if info:
             await bot.send_message(YOUR_TELEGRAM_ID, info, parse_mode="Markdown")
