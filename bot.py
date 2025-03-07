@@ -3,11 +3,10 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
-import os
 
-# 🔹 Замените на ваш токен бота
+# 🔹 Ваш токен бота
 TOKEN = "7973682034:AAF1hOAXBuWX5ylEjhMcSmDDGeJhnFb26qs"
-# 🔹 Укажите свой Telegram ID, чтобы получать сообщения только вы
+# 🔹 Ваш Telegram ID
 YOUR_TELEGRAM_ID = 978523669  
 
 bot = Bot(token=TOKEN)
@@ -16,29 +15,37 @@ dp = Dispatcher()
 # Глобальные переменные
 periodic_task = None
 selected_date = "2025-03-09"  # Дата по умолчанию
+selected_route = "novogrudok-minsk"  # Маршрут по умолчанию
 
-# 🔍 Функция запроса к сайту
+# Города и их ID
+places = {
+    "Novogrudok": "c624785",
+    "Minsk": "c625144"
+}
+
+# 🔍 Функция получения данных о билетах
 async def get_bus_info():
-    global selected_date
-    places = {
-        "Novogrudok": "c624785",
-        "Minsk": "c625144"
-    }
+    global selected_date, selected_route
 
-    url = f'https://atlasbus.by/api/search?from_id={places["Novogrudok"]}&to_id={places["Minsk"]}&calendar_width=30&date={selected_date}&passengers=1'
+    if selected_route == "novogrudok-minsk":
+        from_city, to_city = places["Novogrudok"], places["Minsk"]
+    else:
+        from_city, to_city = places["Minsk"], places["Novogrudok"]
+
+    url = f'https://atlasbus.by/api/search?from_id={from_city}&to_id={to_city}&calendar_width=30&date={selected_date}&passengers=1'
     response = requests.get(url)
     
     if response.status_code != 200:
         return None  
 
     data = response.json().get('rides', [])
-
     available_rides = [ride for ride in data if ride["freeSeats"] > 0]
 
     if not available_rides:
         return None  
 
-    message = f"✅ Билеты есть на {selected_date}\n\n🚌 **Доступные рейсы:**\n\n"
+    route_name = "Новогрудок → Минск" if selected_route == "novogrudok-minsk" else "Минск → Новогрудок"
+    message = f"✅ Билеты есть на {selected_date} ({route_name})\n\n🚌 **Доступные рейсы:**\n\n"
 
     for ride in available_rides:
         message += f"🚏 *Маршрут:* {ride['name']}\n💰 *Цена:* {ride['onlinePrice']} BYN\n🎟 *Свободных мест:* {ride['freeSeats']}\n"
@@ -55,16 +62,17 @@ async def get_bus_info():
 
     return message
 
-# 📩 Обработчик команды /start
+# 📩 Команда /start
 @dp.message(Command("start"))
 async def start(message: Message):
     if message.from_user.id == YOUR_TELEGRAM_ID:
         await message.answer("Привет! Отправь /bus, чтобы получить информацию о рейсах.\n"
-                             "Используй /setdate YYYY-MM-DD для выбора даты.")
+                             "Используй /setdate YYYY-MM-DD для выбора даты.\n"
+                             "Используй /setroute novogrudok-minsk или minsk-novogrudok для выбора маршрута.")
     else:
         await message.answer("❌ У вас нет доступа к этому боту.")
 
-# 📅 Обработчик команды /setdate YYYY-MM-DD
+# 📅 Команда /setdate YYYY-MM-DD
 @dp.message(Command("setdate"))
 async def set_date(message: Message):
     global selected_date
@@ -78,7 +86,25 @@ async def set_date(message: Message):
     else:
         await message.answer("❌ У вас нет доступа к этой команде.")
 
-# 🚍 Обработчик команды /bus
+# 🔄 Команда /setroute для смены маршрута
+@dp.message(Command("setroute"))
+async def set_route(message: Message):
+    global selected_route
+    if message.from_user.id == YOUR_TELEGRAM_ID:
+        try:
+            new_route = message.text.split()[1].lower()
+            if new_route in ["novogrudok-minsk", "minsk-novogrudok"]:
+                selected_route = new_route
+                route_name = "Новогрудок → Минск" if new_route == "novogrudok-minsk" else "Минск → Новогрудок"
+                await message.answer(f"✅ Маршрут изменён: {route_name}")
+            else:
+                await message.answer("❌ Неправильный формат. Используйте: /setroute novogrudok-minsk или /setroute minsk-novogrudok")
+        except IndexError:
+            await message.answer("❌ Используйте: /setroute novogrudok-minsk или /setroute minsk-novogrudok")
+    else:
+        await message.answer("❌ У вас нет доступа к этой команде.")
+
+# 🚍 Команда /bus для получения информации о билетах
 @dp.message(Command("bus"))
 async def send_bus_info(message: Message):
     if message.from_user.id == YOUR_TELEGRAM_ID:
@@ -86,11 +112,11 @@ async def send_bus_info(message: Message):
         if info:
             await message.answer(info, parse_mode="Markdown")
         else:
-            await message.answer("❌ Билетов нет в наличии на выбранную дату.")
+            await message.answer(f"❌ Билетов нет в наличии на {selected_date}.")
     else:
         await message.answer("❌ У вас нет доступа к этому боту.")
 
-# 🚨 Обработчик команды /stop для остановки бота
+# 🚨 Команда /stop для остановки бота
 @dp.message(Command("stop"))
 async def stop(message: Message):
     if message.from_user.id == YOUR_TELEGRAM_ID:
@@ -107,7 +133,7 @@ async def stop(message: Message):
 # 🕒 Фоновая проверка билетов
 async def periodic_request():
     while True:
-        await asyncio.sleep(120)  # Проверка каждые 5 минут  
+        await asyncio.sleep(120)  # Проверка каждые 2 минуты
         info = await get_bus_info()
         if info:
             await bot.send_message(YOUR_TELEGRAM_ID, info, parse_mode="Markdown")
@@ -117,7 +143,7 @@ async def main():
     global periodic_task
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Запуск периодической задачи
+    # Запуск периодической проверки билетов
     periodic_task = asyncio.create_task(periodic_request())
     
     await dp.start_polling(bot)
