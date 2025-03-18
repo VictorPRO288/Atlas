@@ -14,7 +14,7 @@ dp = Dispatcher()
 
 # Глобальные переменные
 periodic_task = None
-selected_date = "2025-03-09"  # Дата по умолчанию
+selected_date = "2025-03-23"  # Дата по умолчанию
 selected_route = "novogrudok-minsk"  # Маршрут по умолчанию
 
 # Города и их ID
