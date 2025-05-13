@@ -23,6 +23,9 @@ places = {
     "Minsk": "c625144"
 }
 
+# Глобальная переменная для хранения последних отправленных рейсов  
+last_sent_rides = set()
+
 # 🔍 Функция получения данных о билетах
 async def get_bus_info():
     global selected_date, selected_route
@@ -58,6 +61,51 @@ async def get_bus_info():
         for stop in ride['dischargeStops']:
             message += f"   🕒 {stop['datetime']} - 📍 {stop['desc']}\n"
 
+        message += "\n" + "#" * 30 + "\n\n"
+
+    return message
+
+# Модифицированная функция получения новых билетов
+async def get_new_bus_info():
+    global selected_date, selected_route, last_sent_rides
+
+    if selected_route == "novogrudok-minsk":
+        from_city, to_city = places["Novogrudok"], places["Minsk"]
+    else:
+        from_city, to_city = places["Minsk"], places["Novogrudok"]
+
+    url = f'https://atlasbus.by/api/search?from_id={from_city}&to_id={to_city}&calendar_width=30&date={selected_date}&passengers=1'
+    response = requests.get(url)
+    
+    if response.status_code != 200:
+        return None
+
+    data = response.json().get('rides', [])
+    available_rides = [ride for ride in data if ride["freeSeats"] > 0]
+
+    # Создаём уникальные идентификаторы для рейсов (например, по id и количеству мест)
+    current_rides = set(f"{ride['id']}_{ride['freeSeats']}" for ride in available_rides)
+
+    # Находим новые рейсы или те, где изменилось количество мест
+    new_rides = [ride for ride in available_rides if f"{ride['id']}_{ride['freeSeats']}" not in last_sent_rides]
+
+    if not new_rides:
+        return None
+
+    # Обновляем список отправленных рейсов
+    last_sent_rides = current_rides
+
+    route_name = "Новогрудок → Минск" if selected_route == "novogrudok-minsk" else "Минск → Новогрудок"
+    message = f"✅ Новые билеты на {selected_date} ({route_name})\n\n🚌 **Доступные рейсы:**\n\n"
+
+    for ride in new_rides:
+        message += f"🚏 *Маршрут:* {ride['name']}\n💰 *Цена:* {ride['onlinePrice']} BYN\n🎟 *Свободных мест:* {ride['freeSeats']}\n"
+        if ride['pickupStops']:
+            stop = ride['pickupStops'][0]
+            message += f"🚦 *Отправление:* {stop['datetime']}\n📍 *Место:* {stop['desc']}\n"
+        message += "🚏 *Прибытие:*\n"
+        for stop in ride['dischargeStops']:
+            message += f"   🕒 {stop['datetime']} - 📍 {stop['desc']}\n"
         message += "\n" + "#" * 30 + "\n\n"
 
     return message
@@ -148,7 +196,7 @@ async def stop(message: Message):
 async def periodic_request():
     while True:
         await asyncio.sleep(120)  # Проверка каждые 2 минуты
-        info = await get_bus_info()
+        info = await get_new_bus_info()
         if info:
             await bot.send_message(YOUR_TELEGRAM_ID, info, parse_mode="Markdown")
 
