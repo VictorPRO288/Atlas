@@ -14,7 +14,6 @@ dp = Dispatcher()
 
 # Глобальные переменные
 periodic_task = None
-selected_date = "2025-05-18"  # Дата по умолчанию
 selected_route = "novogrudok-minsk"  # Маршрут по умолчанию
 
 # Города и их ID
@@ -29,90 +28,6 @@ last_sent_rides = set()
 # Даты для маршрутов
 date_novogrudok_minsk = "2025-06-01"
 date_minsk_novogrudok = "2025-05-31"
-
-# 🔍 Функция получения данных о билетах
-async def get_bus_info():
-    global selected_dates, selected_route
-
-    if selected_route == "novogrudok-minsk":
-        from_city, to_city = places["Novogrudok"], places["Minsk"]
-    else:
-        from_city, to_city = places["Minsk"], places["Novogrudok"]
-
-    url = f'https://atlasbus.by/api/search?from_id={from_city}&to_id={to_city}&calendar_width=30&date={selected_dates[-1]}&passengers=1'
-    response = requests.get(url)
-    
-    if response.status_code != 200:
-        return None  
-
-    data = response.json().get('rides', [])
-    available_rides = [ride for ride in data if ride["freeSeats"] > 0]
-
-    if not available_rides:
-        return None  
-
-    route_name = "Новогрудок → Минск" if selected_route == "novogrudok-minsk" else "Минск → Новогрудок"
-    message = f"✅ Билеты есть на {selected_dates[-1]} ({route_name})\n\n🚌 **Доступные рейсы:**\n\n"
-
-    for ride in available_rides:
-        message += f"🚏 *Маршрут:* {ride['name']}\n💰 *Цена:* {ride['onlinePrice']} BYN\n🎟 *Свободных мест:* {ride['freeSeats']}\n"
-
-        if ride['pickupStops']:
-            stop = ride['pickupStops'][0]
-            message += f"🚦 *Отправление:* {stop['datetime']}\n📍 *Место:* {stop['desc']}\n"
-
-        message += "🚏 *Прибытие:*\n"
-        for stop in ride['dischargeStops']:
-            message += f"   🕒 {stop['datetime']} - 📍 {stop['desc']}\n"
-
-        message += "\n" + "#" * 30 + "\n\n"
-
-    return message
-
-# Модифицированная функция получения новых билетов
-async def get_new_bus_info():
-    global selected_dates, selected_route, last_sent_rides
-
-    if selected_route == "novogrudok-minsk":
-        from_city, to_city = places["Novogrudok"], places["Minsk"]
-    else:
-        from_city, to_city = places["Minsk"], places["Novogrudok"]
-
-    url = f'https://atlasbus.by/api/search?from_id={from_city}&to_id={to_city}&calendar_width=30&date={selected_dates[-1]}&passengers=1'
-    response = requests.get(url)
-    
-    if response.status_code != 200:
-        return None
-
-    data = response.json().get('rides', [])
-    available_rides = [ride for ride in data if ride["freeSeats"] > 0]
-
-    # Создаём уникальные идентификаторы для рейсов (например, по id и количеству мест)
-    current_rides = set(f"{ride['id']}_{ride['freeSeats']}" for ride in available_rides)
-
-    # Находим новые рейсы или те, где изменилось количество мест
-    new_rides = [ride for ride in available_rides if f"{ride['id']}_{ride['freeSeats']}" not in last_sent_rides]
-
-    if not new_rides:
-        return None
-
-    # Обновляем список отправленных рейсов
-    last_sent_rides = current_rides
-
-    route_name = "Новогрудок → Минск" if selected_route == "novogrudok-minsk" else "Минск → Новогрудок"
-    message = f"✅ Новые билеты на {selected_dates[-1]} ({route_name})\n\n🚌 **Доступные рейсы:**\n\n"
-
-    for ride in new_rides:
-        message += f"🚏 *Маршрут:* {ride['name']}\n💰 *Цена:* {ride['onlinePrice']} BYN\n🎟 *Свободных мест:* {ride['freeSeats']}\n"
-        if ride['pickupStops']:
-            stop = ride['pickupStops'][0]
-            message += f"🚦 *Отправление:* {stop['datetime']}\n📍 *Место:* {stop['desc']}\n"
-        message += "🚏 *Прибытие:*\n"
-        for stop in ride['dischargeStops']:
-            message += f"   🕒 {stop['datetime']} - 📍 {stop['desc']}\n"
-        message += "\n" + "#" * 30 + "\n\n"
-
-    return message
 
 # Функция для получения информации о рейсах в оба направления с разными датами
 async def get_both_ways_diff_dates():
