@@ -298,6 +298,50 @@ async def periodic_request():
 async def on_startup(dispatcher):
     asyncio.create_task(periodic_request())
 
+# Команда для вызова меню выбора направления
+@dp.message(Command("menu"))
+async def menu(message: Message):
+    await message.answer(
+        "Выберите направление для установки даты:",
+        reply_markup=choose_direction_kb
+    )
+
+# Обработчик выбора направления
+@dp.message(lambda m: m.text in ["Новогрудок → Минск", "Минск → Новогрудок"])
+async def ask_date(message: Message):
+    direction = message.text
+    await message.answer(
+        f"Введите дату для направления {direction} в формате YYYY-MM-DD:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    # Сохраняем выбранное направление в state (если используете FSM) или глобально
+
+# Обработчик ввода даты (пример без FSM)
+@dp.message(lambda m: m.text and len(m.text) == 10 and m.text[4] == '-' and m.text[7] == '-')
+async def set_direction_date(message: Message):
+    # Здесь нужно знать, для какого направления вводится дата (например, через глобальную переменную или FSM)
+    # Пример для глобальной переменной:
+    global last_chosen_direction, date_novogrudok_minsk, date_minsk_novogrudok
+    date = message.text
+    if last_chosen_direction == "Новогрудок → Минск":
+        date_novogrudok_minsk = date
+        await message.answer(f"✅ Дата для Новогрудок → Минск установлена: {date}", reply_markup=confirm_kb)
+    elif last_chosen_direction == "Минск → Новогрудок":
+        date_minsk_novogrudok = date
+        await message.answer(f"✅ Дата для Минск → Новогрудок установлена: {date}", reply_markup=confirm_kb)
+    else:
+        await message.answer("Сначала выберите направление через /menu", reply_markup=choose_direction_kb)
+
+# Обработчик подтверждения
+@dp.message(lambda m: m.text == "Подтвердить")
+async def confirm(message: Message):
+    await message.answer("Даты успешно сохранены! Для просмотра билетов используйте /bus", reply_markup=ReplyKeyboardRemove())
+
+# Обработчик отмены
+@dp.message(lambda m: m.text == "Отмена")
+async def cancel(message: Message):
+    await message.answer("Операция отменена.", reply_markup=ReplyKeyboardRemove())
+
 # 🚀 Запуск бота
 async def main():
     global periodic_task
