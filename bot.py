@@ -2,12 +2,10 @@ import requests
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
 # 🔹 Ваш токен бота
 TOKEN = "7973682034:AAF1hOAXBuWX5ylEjhMcSmDDGeJhnFb26qs"
-# 🔹 Ваш Telegram ID
-YOUR_TELEGRAM_ID = 978523669  
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -30,6 +28,26 @@ monitor_both_routes = True
 # Текущий выбранный маршрут для одиночного режима
 current_route = "novogrudok-minsk"
 
+# Список всех пользователей, которым отправлять уведомления
+subscribers = set()
+
+# Клавиатура для выбора направления
+choose_direction_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Новогрудок → Минск")],
+        [KeyboardButton(text="Минск → Новогрудок")]
+    ],
+    resize_keyboard=True
+)
+
+# Клавиатура для подтверждения/отмены
+confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Подтвердить"), KeyboardButton(text="Отмена")]
+    ],
+    resize_keyboard=True
+)
+
 # 🔹 Функция для разбиения сообщений на части (если они слишком длинные)
 def split_message(text, max_length=4000):
     parts = []
@@ -42,93 +60,46 @@ def split_message(text, max_length=4000):
     parts.append(text)  # Добавляем оставшуюся часть
     return parts
 
-# 📩 Команда /start
+# 📩 Команда /start (добавляет пользователя в список)
 @dp.message(Command("start"))
 async def start(message: Message):
-    if message.from_user.id == YOUR_TELEGRAM_ID:
-        await message.answer("Привет! Отправь /bus, чтобы получить информацию о рейсах.\n"
-                             "Используй /setdate YYYY-MM-DD для выбора даты.\n"
-                             "Используй /setroute novogrudok-minsk или minsk-novogrudok для выбора маршрута.")
-    else:
-        await message.answer("❌ У вас нет доступа к этому боту.")
+    subscribers.add(message.chat.id)
+    await message.answer("Привет! Отправь /bus, чтобы получить информацию о рейсах.\n"
+                         "Используй /setdate YYYY-MM-DD для выбора даты.\n"
+                         "Используй /setroute novogrudok-minsk или minsk-novogrudok для выбора маршрута.")
 
-# 📅 Команда /setdate YYYY-MM-DD
-@dp.message(Command("setdate"))
-async def set_date(message: Message):
-    global selected_dates
-    if message.from_user.id == YOUR_TELEGRAM_ID:
-        try:
-            new_dates = message.text.split()[1:]
-            if new_dates:
-                selected_dates = new_dates
-                await message.answer(f"✅ Даты изменены: {', '.join(selected_dates)}")
-            else:
-                await message.answer("❌ Используйте: /setdate YYYY-MM-DD YYYY-MM-DD ...")
-        except IndexError:
-            await message.answer("❌ Используйте: /setdate YYYY-MM-DD YYYY-MM-DD ...")
-    else:
-        await message.answer("❌ У вас нет доступа к этой команде.")
-
-# 🔄 Команда /setroute для смены маршрута
-@dp.message(Command("setroute"))
-async def set_route(message: Message):
-    global selected_route, current_route
-    if message.from_user.id == YOUR_TELEGRAM_ID:
-        try:
-            new_route = message.text.split()[1].lower()
-            if new_route in ["novogrudok-minsk", "minsk-novogrudok"]:
-                selected_route = new_route
-                current_route = new_route
-                route_name = "Новогрудок → Минск" if new_route == "novogrudok-minsk" else "Минск → Новогрудок"
-                await message.answer(f"✅ Маршрут изменён: {route_name}")
-            else:
-                await message.answer("❌ Неправильный формат. Используйте: /setroute novogrudok-minsk или /setroute minsk-novogrudok")
-        except IndexError:
-            await message.answer("❌ Используйте: /setroute novogrudok-minsk или /setroute minsk-novogrudok")
-    else:
-        await message.answer("❌ У вас нет доступа к этой команде.")
 
 # 🔄 Команда /monitor для переключения режима мониторинга
 @dp.message(Command("monitor"))
 async def toggle_monitoring(message: Message):
     global monitor_both_routes
-    if message.from_user.id == YOUR_TELEGRAM_ID:
-        try:
-            mode = message.text.split()[1].lower()
-            if mode in ["both", "single"]:
-                monitor_both_routes = (mode == "both")
-                status = "оба маршрута" if monitor_both_routes else f"один маршрут ({current_route})"
-                await message.answer(f"✅ Режим мониторинга изменён: {status}")
-            else:
-                await message.answer("❌ Неправильный формат. Используйте: /monitor both или /monitor single")
-        except IndexError:
-            await message.answer("❌ Используйте: /monitor both или /monitor single")
-    else:
-        await message.answer("❌ У вас нет доступа к этой команде.")
+    try:
+        mode = message.text.split()[1].lower()
+        if mode in ["both", "single"]:
+            monitor_both_routes = (mode == "both")
+            status = "оба маршрута" if monitor_both_routes else f"один маршрут ({current_route})"
+            await message.answer(f"✅ Режим мониторинга изменён: {status}")
+        else:
+            await message.answer("❌ Неправильный формат. Используйте: /monitor both или /monitor single")
+    except IndexError:
+        await message.answer("❌ Используйте: /monitor both или /monitor single")
 
 # 🗓 Команда /setdates для установки дат в оба направления
 @dp.message(Command("setdates"))
 async def set_dates(message: Message):
     global date_novogrudok_minsk, date_minsk_novogrudok
-    if message.from_user.id == YOUR_TELEGRAM_ID:
-        try:
-            _, date1, date2 = message.text.split()
-            date_novogrudok_minsk = date1
-            date_minsk_novogrudok = date2
-            await message.answer(f"✅ Дата Новогрудок→Минск: {date1}\n✅ Дата Минск→Новогрудок: {date2}")
-        except Exception:
-            await message.answer("❌ Используйте: /setdates YYYY-MM-DD YYYY-MM-DD")
-    else:
-        await message.answer("❌ У вас нет доступа к этой команде.")
+    try:
+        _, date1, date2 = message.text.split()
+        date_novogrudok_minsk = date1
+        date_minsk_novogrudok = date2
+        await message.answer(f"✅ Дата Новогрудок→Минск: {date1}\n✅ Дата Минск→Новогрудок: {date2}")
+    except Exception:
+        await message.answer("❌ Используйте: /setdates YYYY-MM-DD YYYY-MM-DD")
 
 # 🚍 Обработчик команды /bus (исправленный)
 @dp.message(Command("bus"))
 async def send_bus_info(message: Message):
     global current_route, monitor_both_routes
-    if message.from_user.id != YOUR_TELEGRAM_ID:
-        await message.answer("❌ У вас нет доступа к этому боту.")
-        return
-
     sent = False
 
     # Новогрудок → Минск
@@ -185,16 +156,13 @@ async def send_bus_info(message: Message):
 # 🚨 Команда /stop для остановки бота
 @dp.message(Command("stop"))
 async def stop(message: Message):
-    if message.from_user.id == YOUR_TELEGRAM_ID:
-        global periodic_task
-        if periodic_task is not None:
-            periodic_task.cancel()
-            periodic_task = None
-            await message.answer("✅ Бот остановлен.")
-        else:
-            await message.answer("❌ Нет активной задачи для остановки.")
+    global periodic_task
+    if periodic_task is not None:
+        periodic_task.cancel()
+        periodic_task = None
+        await message.answer("✅ Бот остановлен.")
     else:
-        await message.answer("❌ У вас нет доступа к этой команде.")
+        await message.answer("❌ Нет активной задачи для остановки.")
 
 # Глобальная переменная для хранения последних отправленных рейсов
 last_sent_rides = None
@@ -286,7 +254,9 @@ async def periodic_request():
                                 msg += f"   🕒 {stop['datetime']} - 📍 {stop['desc']}\n"
                             msg += "\n" + "#" * 30 + "\n\n"
                     for part in split_message(msg):
-                        await bot.send_message(YOUR_TELEGRAM_ID, part, parse_mode="Markdown")
+                        # Отправляем всем подписчикам
+                        for chat_id in subscribers:
+                            await bot.send_message(chat_id, part, parse_mode="Markdown")
                 last_sent_novogrudok_minsk = set1
 
         # Проверяем маршрут Минск → Новогрудок
@@ -319,7 +289,8 @@ async def periodic_request():
                                 msg += f"   🕒 {stop['datetime']} - 📍 {stop['desc']}\n"
                             msg += "\n" + "#" * 30 + "\n\n"
                     for part in split_message(msg):
-                        await bot.send_message(YOUR_TELEGRAM_ID, part, parse_mode="Markdown")
+                        for chat_id in subscribers:
+                            await bot.send_message(chat_id, part, parse_mode="Markdown")
                 last_sent_minsk_novogrudok = set2
 
 # Запуск фоновой задачи при старте бота
