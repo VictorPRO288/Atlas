@@ -1,12 +1,14 @@
+import os
+from dotenv import load_dotenv
 import requests
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
+load_dotenv()
 # 🔹 Ваш токен бота
-TOKEN = "7973682034:AAF1hOAXBuWX5ylEjhMcSmDDGeJhnFb26qs"
-
+TOKEN = os.getenv("token")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -17,14 +19,14 @@ places = {
 }
 
 # Даты для маршрутов
-date_novogrudok_minsk = "2025-06-01"
-date_minsk_novogrudok = "2025-05-31"
+date_novogrudok_minsk = "2025-11-09"
+date_minsk_novogrudok = "2025-11-06"
 
 # Глобальные переменные для хранения последних отправленных рейсов
 last_sent_novogrudok_minsk = None
 last_sent_minsk_novogrudok = None
 # Режим мониторинга маршрутов (True - оба маршрута, False - один маршрут)
-monitor_both_routes = True
+monitor_both_routes = False
 # Текущий выбранный маршрут для одиночного режима
 current_route = "novogrudok-minsk"
 
@@ -68,21 +70,44 @@ async def start(message: Message):
                          "Используй /setdate YYYY-MM-DD для выбора даты.\n"
                          "Используй /setroute novogrudok-minsk или minsk-novogrudok для выбора маршрута.")
 
+# 📍 Команда /select_route для выбора маршрута с помощью inline-клавиатуры
+@dp.message(Command("select_route"))
+async def cmd_select_route(message: Message):
+    """Send inline keyboard with route options"""
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(text="Маршрут 1", callback_data="route_1"),
+            types.InlineKeyboardButton(text="Маршрут 2", callback_data="route_2")
+        ],
+        [
+            types.InlineKeyboardButton(text="Оба маршрута", callback_data="both_routes")
+        ]
+    ])
+    
+    await message.answer("Пожалуйста, выберите маршрут:", reply_markup=keyboard)
 
-# 🔄 Команда /monitor для переключения режима мониторинга
-@dp.message(Command("monitor"))
-async def toggle_monitoring(message: Message):
-    global monitor_both_routes
-    try:
-        mode = message.text.split()[1].lower()
-        if mode in ["both", "single"]:
-            monitor_both_routes = (mode == "both")
-            status = "оба маршрута" if monitor_both_routes else f"один маршрут ({current_route})"
-            await message.answer(f"✅ Режим мониторинга изменён: {status}")
-        else:
-            await message.answer("❌ Неправильный формат. Используйте: /monitor both или /monitor single")
-    except IndexError:
-        await message.answer("❌ Используйте: /monitor both или /monitor single")
+# 📍 Обработчик выбора маршрута
+@dp.callback_query(lambda c: c.data in ['route_1', 'route_2', 'both_routes'])
+async def process_route_selection(callback_query: types.CallbackQuery):
+    """Process route selection"""
+    global current_route, monitor_both_routes
+    
+    if callback_query.data == "route_1":
+        current_route = "novogrudok-minsk"  # or "minsk-novogrudok" depending on your preference
+        monitor_both_routes = False
+        await callback_query.message.edit_text("Вы выбрали: Маршрут 1 (Новогрудок → Минск)")
+        await callback_query.answer("Выбран маршрут 1")
+        
+    elif callback_query.data == "route_2":
+        current_route = "minsk-novogrudok"  # or another route of your choice
+        monitor_both_routes = False
+        await callback_query.message.edit_text("Вы выбрали: Маршрут 2 (Минск → Новогрудок)")
+        await callback_query.answer("Выбран маршрут 2")
+        
+    elif callback_query.data == "both_routes":
+        monitor_both_routes = True
+        await callback_query.message.edit_text("Вы выбрали: Оба маршрута")
+        await callback_query.answer("Выбраны оба маршрута")
 
 # 🗓 Команда /setdates для установки дат в оба направления
 @dp.message(Command("setdates"))
