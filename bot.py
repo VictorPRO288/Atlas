@@ -19,8 +19,8 @@ places = {
 }
 
 # Даты для маршрутов
-date_novogrudok_minsk = "2025-11-09"
-date_minsk_novogrudok = "2025-11-06"
+date_novogrudok_minsk = "2025-11-23"
+date_minsk_novogrudok = "2025-11-22"
 
 # Глобальные переменные для хранения последних отправленных рейсов
 last_sent_novogrudok_minsk = None
