@@ -1,10 +1,7 @@
-FROM python:3.10
+FROM python:3.11-slim
 WORKDIR /app
-COPY . .
-
-RUN python -m venv venv && . venv/bin/activate \
-    && pip install --upgrade pip \
-    && pip install -r requirements.txt
-
-CMD ["venv/bin/python", "bot.py"]
-
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY bot.py .
+EXPOSE 8080
+CMD ["python", "bot.py"]
