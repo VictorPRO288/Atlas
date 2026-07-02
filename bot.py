@@ -5,7 +5,7 @@ import requests
 import asyncio
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -25,57 +25,96 @@ bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# Города и их ID
-places = {
-    "Novogrudok": "c624785",
-    "Minsk": "c625144"
+PLACES = {
+    "Минск": "c625144",
+    "Новогрудок": "c624785",
 }
+ROUTES = {
+    "minsk-novogrudok": ("Минск", "Новогрудок"),
+    "novogrudok-minsk": ("Новогрудок", "Минск"),
+}
+WEEKDAY = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
-# Даты для маршрутов
-date_novogrudok_minsk = "2025-11-09"
-date_minsk_novogrudok = "2025-11-06"
+subscriptions: dict[int, list[dict]] = {}
+prev_rides: dict[str, set] = {}
 
-# Глобальные переменные для хранения последних отправленных рейсов
-last_sent_novogrudok_minsk = None
-last_sent_minsk_novogrudok = None
-# Режим мониторинга маршрутов (True - оба маршрута, False - один маршрут)
-monitor_both_routes = False
-# Текущий выбранный маршрут для одиночного режима
-current_route = "novogrudok-minsk"
 
-# Список всех пользователей, которым отправлять уведомления
-subscribers = set()
+class SubForm(StatesGroup):
+    choosing_route = State()
+    choosing_date = State()
+    choosing_time = State()
 
-# Клавиатура для выбора направления
-choose_direction_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Новогрудок → Минск")],
-        [KeyboardButton(text="Минск → Новогрудок")]
-    ],
-    resize_keyboard=True
-)
 
-# Клавиатура для подтверждения/отмены
-confirm_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Подтвердить"), KeyboardButton(text="Отмена")]
-    ],
-    resize_keyboard=True
-)
+def build_route_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Минск -> Новогрудок", callback_data="sub_route_minsk-novogrudok")],
+        [InlineKeyboardButton(text="Новогрудок -> Минск", callback_data="sub_route_novogrudok-minsk")],
+    ])
 
-# 🔹 Функция для разбиения сообщений на части (если они слишком длинные)
-def split_message(text, max_length=4000):
-    parts = []
-    while len(text) > max_length:
-        split_index = text[:max_length].rfind("\n")  # Ищем последний перенос строки
-        if split_index == -1:
-            split_index = max_length
-        parts.append(text[:split_index])
-        text = text[split_index:]
-    parts.append(text)  # Добавляем оставшуюся часть
-    return parts
 
-# 📩 Команда /start (добавляет пользователя в список)
+def build_date_kb() -> InlineKeyboardMarkup:
+    today = datetime.now()
+    buttons = []
+    for i in range(7):
+        d = today + timedelta(days=i)
+        wd = WEEKDAY[d.weekday()]
+        label = f"{d.strftime('%d.%m')} ({wd})"
+        if i == 0:
+            label = "Сегодня, " + label
+        elif i == 1:
+            label = "Завтра, " + label
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"sub_date_{d.strftime('%Y-%m-%d')}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def format_date_short(date_str: str) -> str:
+    return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m")
+
+
+def booking_url(ride: dict, from_id: str, to_id: str, date: str) -> str:
+    ride_id = ride.get("rideId", ride.get("id", ""))
+    return (
+        f"https://atlasbus.by/booking/{ride_id}"
+        f"?passengers=1&from={from_id}&to={to_id}&date={date}&pickup=&discharge="
+    )
+
+
+def fetch_rides(from_id: str, to_id: str, date: str) -> list | None:
+    url = (
+        f"https://atlasbus.by/api/search"
+        f"?from_id={from_id}&to_id={to_id}"
+        f"&calendar_width=30&date={date}&passengers=1"
+    )
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.json().get("rides", [])
+    except Exception as e:
+        log.error(f"fetch_rides error: {e}")
+    return None
+
+
+def filter_rides(rides: list, time_from: str, time_to: str) -> list:
+    result = []
+    for ride in rides:
+        if ride.get("freeSeats", 0) <= 0:
+            continue
+        if not ride.get("pickupStops"):
+            continue
+        dep = datetime.fromisoformat(ride["pickupStops"][0]["datetime"]).strftime("%H:%M")
+        if time_from <= dep <= time_to:
+            result.append(ride)
+    return result
+
+
+def short_ride(ride: dict, from_id: str, to_id: str, date: str) -> str:
+    dep = datetime.fromisoformat(ride["pickupStops"][0]["datetime"]).strftime("%H:%M")
+    arr = datetime.fromisoformat(ride["arrival"]).strftime("%H:%M")
+    seats = ride.get("freeSeats", 0)
+    url = booking_url(ride, from_id, to_id, date)
+    return f"  {dep} - {arr} | Мест: {seats}\n  [Забронировать]({url})"
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     log.info(f"/start from {message.from_user.id}")
@@ -106,7 +145,6 @@ async def cmd_unsubscribe(message: Message, state: FSMContext):
     if not subs:
         await message.answer("У вас нет подписок.")
         return
-
     buttons = []
     for i, sub in enumerate(subs):
         date_short = format_date_short(sub["date"])
@@ -125,7 +163,6 @@ async def cmd_list(message: Message, state: FSMContext):
     if not subs:
         await message.answer("У вас нет подписок.")
         return
-
     lines = ["Ваши подписки:\n"]
     for i, sub in enumerate(subs, 1):
         date_short = format_date_short(sub["date"])
@@ -134,8 +171,6 @@ async def cmd_list(message: Message, state: FSMContext):
         lines.append(f"   {date_short}  {time_range}")
     await message.answer("\n".join(lines))
 
-
-# ─── Callback-кнопки ───
 
 @dp.callback_query(F.data.startswith("sub_route_"))
 async def cb_sub_route(callback: types.CallbackQuery, state: FSMContext):
@@ -165,18 +200,15 @@ async def cb_unsubscribe(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     user_id = callback.from_user.id
     data = callback.data.replace("unsub_", "")
-
     if data == "cancel":
         await callback.message.edit_text("Отмена.")
         await callback.answer()
         return
-
     try:
         idx = int(data)
     except ValueError:
         await callback.answer()
         return
-
     subs = subscriptions.get(user_id, [])
     if 0 <= idx < len(subs):
         removed = subs.pop(idx)
@@ -189,8 +221,6 @@ async def cb_unsubscribe(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ─── FSM: ввод времени (после всех команд и кнопок) ───
-
 @dp.message(SubForm.choosing_time)
 async def cb_sub_time(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -202,7 +232,6 @@ async def cb_sub_time(message: Message, state: FSMContext):
         return
 
     time_from, time_to = "00:00", "23:59"
-
     if "-" in text:
         parts = text.split("-")
         if len(parts) == 2:
@@ -278,14 +307,11 @@ async def cb_sub_time(message: Message, state: FSMContext):
     )
 
 
-# ─── Фоновый мониторинг ───
-
 async def monitor():
     log.info("Monitor started")
     while True:
         await asyncio.sleep(60)
         now = datetime.now()
-
         for user_id, subs in list(subscriptions.items()):
             for sub in list(subs):
                 sub_date = datetime.strptime(sub["date"], "%Y-%m-%d")
