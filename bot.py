@@ -25,98 +25,57 @@ bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-PLACES = {
-    "Минск": "c625144",
-    "Новогрудок": "c624785",
+# Города и их ID
+places = {
+    "Novogrudok": "c624785",
+    "Minsk": "c625144"
 }
-ROUTES = {
-    "minsk-novogrudok": ("Минск", "Новогрудок"),
-    "novogrudok-minsk": ("Новогрудок", "Минск"),
-}
-WEEKDAY = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
-subscriptions: dict[int, list[dict]] = {}
-prev_rides: dict[str, set] = {}
+# Даты для маршрутов
+date_novogrudok_minsk = "2025-11-09"
+date_minsk_novogrudok = "2025-11-06"
 
+# Глобальные переменные для хранения последних отправленных рейсов
+last_sent_novogrudok_minsk = None
+last_sent_minsk_novogrudok = None
+# Режим мониторинга маршрутов (True - оба маршрута, False - один маршрут)
+monitor_both_routes = False
+# Текущий выбранный маршрут для одиночного режима
+current_route = "novogrudok-minsk"
 
-class SubForm(StatesGroup):
-    choosing_route = State()
-    choosing_date = State()
-    choosing_time = State()
+# Список всех пользователей, которым отправлять уведомления
+subscribers = set()
 
+# Клавиатура для выбора направления
+choose_direction_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Новогрудок → Минск")],
+        [KeyboardButton(text="Минск → Новогрудок")]
+    ],
+    resize_keyboard=True
+)
 
-def build_route_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Минск -> Новогрудок", callback_data="sub_route_minsk-novogrudok")],
-        [InlineKeyboardButton(text="Новогрудок -> Минск", callback_data="sub_route_novogrudok-minsk")],
-    ])
+# Клавиатура для подтверждения/отмены
+confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Подтвердить"), KeyboardButton(text="Отмена")]
+    ],
+    resize_keyboard=True
+)
 
+# 🔹 Функция для разбиения сообщений на части (если они слишком длинные)
+def split_message(text, max_length=4000):
+    parts = []
+    while len(text) > max_length:
+        split_index = text[:max_length].rfind("\n")  # Ищем последний перенос строки
+        if split_index == -1:
+            split_index = max_length
+        parts.append(text[:split_index])
+        text = text[split_index:]
+    parts.append(text)  # Добавляем оставшуюся часть
+    return parts
 
-def build_date_kb() -> InlineKeyboardMarkup:
-    today = datetime.now()
-    buttons = []
-    for i in range(7):
-        d = today + timedelta(days=i)
-        wd = WEEKDAY[d.weekday()]
-        label = f"{d.strftime('%d.%m')} ({wd})"
-        if i == 0:
-            label = "Сегодня, " + label
-        elif i == 1:
-            label = "Завтра, " + label
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"sub_date_{d.strftime('%Y-%m-%d')}")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def format_date_short(date_str: str) -> str:
-    return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m")
-
-
-def booking_url(ride: dict, from_id: str, to_id: str, date: str) -> str:
-    ride_id = ride.get("rideId", ride.get("id", ""))
-    return (
-        f"https://atlasbus.by/booking/{ride_id}"
-        f"?passengers=1&from={from_id}&to={to_id}&date={date}&pickup=&discharge="
-    )
-
-
-def fetch_rides(from_id: str, to_id: str, date: str) -> list | None:
-    url = (
-        f"https://atlasbus.by/api/search"
-        f"?from_id={from_id}&to_id={to_id}"
-        f"&calendar_width=30&date={date}&passengers=1"
-    )
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            return r.json().get("rides", [])
-    except Exception as e:
-        log.error(f"fetch_rides error: {e}")
-    return None
-
-
-def filter_rides(rides: list, time_from: str, time_to: str) -> list:
-    result = []
-    for ride in rides:
-        if ride.get("freeSeats", 0) <= 0:
-            continue
-        if not ride.get("pickupStops"):
-            continue
-        dep = datetime.fromisoformat(ride["pickupStops"][0]["datetime"]).strftime("%H:%M")
-        if time_from <= dep <= time_to:
-            result.append(ride)
-    return result
-
-
-def short_ride(ride: dict, from_id: str, to_id: str, date: str) -> str:
-    dep = datetime.fromisoformat(ride["pickupStops"][0]["datetime"]).strftime("%H:%M")
-    arr = datetime.fromisoformat(ride["arrival"]).strftime("%H:%M")
-    seats = ride.get("freeSeats", 0)
-    url = booking_url(ride, from_id, to_id, date)
-    return f"  {dep} - {arr} | Мест: {seats}\n  [Забронировать]({url})"
-
-
-# ─── Команды (всегда в приоритете) ───
-
+# 📩 Команда /start (добавляет пользователя в список)
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     log.info(f"/start from {message.from_user.id}")

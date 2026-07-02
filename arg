@@ -1,0 +1,129 @@
+import chromadb
+from chromadb.config import Settings
+import ollama
+import os
+
+# === 1. Подготовка Chroma (Астра) ===
+client = chromadb.Client(Settings(anonymized_telemetry=False))
+collection = client.get_or_create_collection(
+    name="docs",
+    metadata={"hnsw:space": "cosine"}  # <-- как <-> в PG, но локально
+)
+
+# === 2. Чанкование: ~200 слов, нахлёст 20 слов ===
+def chunk_text(text: str, size=200, overlap=20) -> list[str]:
+    words = text.split()
+    chunks = []
+    step = size - overlap
+    for i in range(0, len(words), step):
+        chunk = " ".join(words[i:i + size])
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+# === 3. Эмбеддинг через локальную модель (nomic-embed-text) ===
+def embed(text: str) -> list[float]:
+    return ollama.embeddings(model="nomic-embed-text", prompt=text)["embedding"]
+
+# === 4. Загрузка документа (plain text) ===
+def load_and_index(file_path: str):
+    with open(file_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    chunks = chunk_text(text, size=200, overlap=20)
+    
+    print(f"✂️  Разбито на {len(chunks)} чанков. Генерирую эмбеддинги...")
+    embeddings = [embed(chunk) for chunk in chunks]
+    
+    collection.add(
+        ids=[f"id_{i}" for i in range(len(chunks))],
+        embeddings=embeddings,
+        documents=chunks
+    )
+    print("✅ Документ проиндексирован.")
+
+# === 5. Поиск релевантных чанков ===
+def retrieve(query: str, top_k=3) -> list[str]:
+    emb = embed(query)
+    results = collection.query(
+        query_embeddings=[emb],
+        n_results=top_k
+    )
+    return results["documents"][0]  # список строк
+
+# === 6. Переформулировка вопроса (с учётом истории) ===
+def rewrite_question(history: list[dict], question: str) -> str:
+    ctx = "\n".join(
+        f"{'Пользователь' if m['role']=='user' else 'Ассистент'}: {m['content']}"
+        for m in history
+    )
+    prompt = f"""История диалога:
+{ctx}
+
+Новый вопрос пользователя: {question}
+
+Переформулируй его в одно чёткое, развернутое предложение-запрос для поиска в документах. Без пояснений — только запрос."""
+    
+    resp = ollama.chat(
+        model="qwen2:7b-instruct-q4_K_M",
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": 0.1}
+    )
+    return resp["message"]["content"].strip()
+
+# === 7. Генерация финального ответа ===
+def answer_question(history: list[dict], question: str) -> str:
+    # Шаг 1: переформулировка
+    rewritten = rewrite_question(history, question)
+    print(f"🔍 Переформулировано: {rewritten}")
+    
+    # Шаг 2: поиск чанков
+    relevant = retrieve(rewritten, top_k=3)
+    context = "\n\n".join(f"[Фрагмент {i+1}]: {c}" for i, c in enumerate(relevant))
+    
+    # Шаг 3: сборка промпта с контекстом и историей
+    history_text = "\n".join(
+        f"{'Пользователь' if m['role']=='user' else 'Ассистент'}: {m['content']}"
+        for m in history
+    )
+    
+    prompt = f"""Используй ТОЛЬКО информацию из контекста ниже, чтобы ответить.
+
+Контекст:
+{context}
+
+История диалога:
+{history_text}
+
+Вопрос пользователя: {question}
+
+Ответ (на русском, по делу, без воды):"""
+    
+    resp = ollama.chat(
+        model="qwen2:7b-instruct-q4_K_M",
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": 0.3}
+    )
+    return resp["message"]["content"].strip()
+
+# === 8. Основной чат ===
+def main():
+    print("📄 Введите путь к .txt файлу для индексации:")
+    path = input().strip()
+    load_and_index(path)
+
+    history = []
+    print("\n💬 Чат готов. Введите 'выход', чтобы завершить.")
+    
+    while True:
+        user_input = input("\nВы: ").strip()
+        if user_input.lower() in ("выход", "exit"):
+            break
+
+        history.append({"role": "user", "content": user_input})
+        print("⏳ Думаю...")
+        answer = answer_question(history, user_input)
+        print(f"🤖: {answer}")
+        history.append({"role": "assistant", "content": answer})
+
+if __name__ == "__main__":
+    main()
