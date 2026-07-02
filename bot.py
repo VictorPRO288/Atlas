@@ -457,12 +457,8 @@ def create_app():
     return app
 
 
-async def main():
+if __name__ == "__main__":
     log.info("Bot starting...")
     app = create_app()
     log.info(f"Starting web server on port {PORT}")
     web.run_app(app, host="0.0.0.0", port=PORT)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
