@@ -474,6 +474,18 @@ async def handle_navigation(callback: CallbackQuery, state: FSMContext):
             reply_markup=build_date_kb(),
             parse_mode="Markdown",
         )
+    elif dest == "time":
+        await state.set_state(BotFlow.choosing_time)
+        data = await state.get_data()
+        route_info = ROUTES.get(data.get("route", "minsk-novogrudok"), {})
+        d_display = format_date_display(data.get("date", get_now().strftime("%Y-%m-%d")))
+        await callback.message.edit_text(
+            f"📍 *{route_info.get('title', '')}*\n"
+            f"📅 Дата: *{d_display}*\n\n"
+            "⏰ Выберите желаемое время отправления:",
+            reply_markup=build_time_kb(),
+            parse_mode="Markdown",
+        )
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("set_route:"))
@@ -565,7 +577,7 @@ async def handle_custom_date_input(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("set_time:"))
 async def handle_set_time(callback: CallbackQuery, state: FSMContext):
-    time_val = callback.data.split(":")[1]
+    time_val = callback.data.removeprefix("set_time:")
     
     if time_val == "custom":
         await state.set_state(BotFlow.waiting_custom_time)
@@ -577,7 +589,7 @@ async def handle_set_time(callback: CallbackQuery, state: FSMContext):
             "• `до 12:00`\n"
             "• `15:30`\n\n"
             "Или вернитесь назад:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад к выбору времени", callback_data="set_date:back_to_time")]]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад к выбору времени", callback_data="nav:time")]]),
             parse_mode="Markdown",
         )
         await callback.answer()
@@ -620,8 +632,11 @@ async def finalize_selection(user_id: int, target_msg: Message, state: FSMContex
             f"📍 {route_info['title']}\n"
             f"📅 {format_date_display(date_val)} (с {time_from} по {time_to})"
         )
-        if hasattr(target_msg, "edit_text"):
-            await target_msg.edit_text(wait_text)
+        if target_msg.from_user and target_msg.from_user.is_bot:
+            try:
+                await target_msg.edit_text(wait_text)
+            except Exception:
+                await target_msg.answer(wait_text)
         else:
             await target_msg.answer(wait_text)
 
@@ -655,7 +670,7 @@ async def finalize_selection(user_id: int, target_msg: Message, state: FSMContex
             full_msg = header + "\n".join(ride_texts)
             
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔔 Отслеживать изменения мест", callback_data=f"fast_sub:{route_key}:{date_val}:{time_from}:{time_to}")],
+                [InlineKeyboardButton(text="🔔 Отслеживать изменения мест", callback_data=f"fast_sub|{route_key}|{date_val}|{time_from}|{time_to}")],
                 [InlineKeyboardButton(text="🔍 Новый поиск", callback_data="act:search")],
                 [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="nav:main")],
             ])
@@ -689,7 +704,7 @@ async def finalize_selection(user_id: int, target_msg: Message, state: FSMContex
                 "Как только кто-то сдаст билет или откроется рейс, бот пришлет вам уведомление со ссылкой!"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔔 Включить отслеживание на это время", callback_data=f"fast_sub:{route_key}:{date_val}:{time_from}:{time_to}")],
+                [InlineKeyboardButton(text="🔔 Включить отслеживание на это время", callback_data=f"fast_sub|{route_key}|{date_val}|{time_from}|{time_to}")],
                 [InlineKeyboardButton(text="🔍 Выбрать другое время", callback_data="act:search")],
                 [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="nav:main")],
             ])
@@ -742,9 +757,9 @@ def create_subscription(user_id: int, route_key: str, date: str, time_from: str,
     save_subscriptions()
     log.info(f"New subscription for user {user_id}: {route_key} on {date} ({time_from}-{time_to})")
 
-@dp.callback_query(F.data.startswith("fast_sub:"))
+@dp.callback_query(F.data.startswith("fast_sub|"))
 async def handle_fast_sub(callback: CallbackQuery):
-    parts = callback.data.split(":")
+    parts = callback.data.split("|")
     route_key, date_val, time_from, time_to = parts[1], parts[2], parts[3], parts[4]
     create_subscription(callback.from_user.id, route_key, date_val, time_from, time_to)
     
