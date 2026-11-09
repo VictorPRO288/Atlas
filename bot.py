@@ -20,6 +20,7 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.backoff import BackoffConfig
 
 # ─── Configuration & Logging ──────────────────────────────────────────────────
 
@@ -190,24 +191,36 @@ def parse_time_range(text: str) -> tuple[str, str] | None:
 # ─── API Helper ───────────────────────────────────────────────────────────────
 
 async def fetch_rides(session: aiohttp.ClientSession, from_id: str, to_id: str, date: str) -> list | None:
-    """Асинхронный запрос к API AtlasBus"""
+    """Асинхронный запрос к API AtlasBus с полными заголовками браузера и устойчивостью к сбоям"""
     url = (
         f"https://atlasbus.by/api/search"
         f"?from_id={from_id}&to_id={to_id}"
         f"&calendar_width=30&date={date}&passengers=1"
     )
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        "Referer": "https://atlasbus.by/",
+        "Origin": "https://atlasbus.by",
     }
+    timeout = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        async with session.get(url, headers=headers, timeout=timeout) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return data.get("rides", [])
+            elif resp.status in (400, 429, 502, 503):
+                err_text = await resp.text()
+                log.warning(f"AtlasBus API returned HTTP {resp.status} for {date}: {err_text[:120]}")
             else:
                 log.warning(f"AtlasBus API returned HTTP {resp.status} for {date}")
+    except asyncio.TimeoutError:
+        log.warning(f"AtlasBus API timeout for {date} (>15s)")
+    except aiohttp.ClientError as e:
+        log.warning(f"AtlasBus API network error for {date}: {type(e).__name__} {e}")
     except Exception as e:
-        log.error(f"Error fetching rides for {date}: {e}")
+        log.error(f"Error fetching rides for {date}: {type(e).__name__} {e}")
     return None
 
 def filter_rides_by_time(rides: list, time_from: str, time_to: str) -> list:
@@ -840,12 +853,13 @@ async def handle_del_all_subs(callback: CallbackQuery):
 # ─── Background Monitor Task ──────────────────────────────────────────────────
 
 async def monitor_subscriptions():
-    """Фоновая задача: проверяет рейсы каждые 30 секунд для всех подписчиков"""
+    """Фоновая задача: проверяет рейсы каждые 45 секунд для всех подписчиков с защитой от перегрузки соединений"""
     log.info("Background subscription monitor started")
     
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(limit=10, ttl_dns_cache=300, enable_cleanup_closed=True)
+    async with aiohttp.ClientSession(connector=connector) as session:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(45)
             
             if not subscriptions:
                 continue
@@ -869,12 +883,12 @@ async def monitor_subscriptions():
                 for s in subs:
                     queries.add((s["from_id"], s["to_id"], s["date"]))
 
-            # 3. Делаем запросы к API
+            # 3. Делаем запросы к API с паузой между запросами
             fetched_results = {}
             for from_id, to_id, date_str in queries:
                 rides = await fetch_rides(session, from_id, to_id, date_str)
                 fetched_results[(from_id, to_id, date_str)] = rides or []
-                await asyncio.sleep(0.5)  # Небольшая пауза между запросами
+                await asyncio.sleep(1.0)  # Пауза 1 секунда между запросами к AtlasBus
 
             # 4. Проверяем каждую подписку
             for user_id, subs in list(subscriptions.items()):
@@ -978,9 +992,21 @@ async def main():
     # Запускаем фоновый мониторинг
     asyncio.create_task(monitor_subscriptions())
 
+    backoff = BackoffConfig(
+        min_delay=5.0,    # При сбоях Telegram API ждем минимум 5 секунд
+        max_delay=60.0,   # Максимальная задержка до 60 секунд
+        factor=2.0,       # Экспоненциальное увеличение задержки
+        jitter=0.5,
+    )
+
     try:
         log.info("Bot is active and ready to handle updates!")
-        await dp.start_polling(bot)
+        await dp.start_polling(
+            bot,
+            polling_timeout=30,  # Стандартный таймаут Long Polling 30 сек
+            backoff_config=backoff,
+            allowed_updates=["message", "callback_query"],
+        )
     finally:
         await web_runner.cleanup()
         await bot.session.close()
